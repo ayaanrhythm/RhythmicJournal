@@ -11,3 +11,6 @@
 - Save journal entries to Firebase Firestore
 - Upload images to Firebase Storage
 - View posts, favorites, profile, and albums
+
+
+Let me know if there are any issues 
