@@ -76,6 +76,11 @@ data class GoogleUser(
     val profilePictureUrl: String?
 )
 
+private enum class AuthAction {
+    LOGIN,
+    SIGN_UP
+}
+
 private val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance() }
 
 @Composable
@@ -98,8 +103,46 @@ fun LoginScreen(
 
     var currentImageIndex by remember { mutableIntStateOf(0) }
     var showTermsSheet by remember { mutableStateOf(false) }
-    var isGoogleLoading by remember { mutableStateOf(false) }
+    var activeAuthAction by remember { mutableStateOf<AuthAction?>(null) }
     var googleError by remember { mutableStateOf<String?>(null) }
+
+    val isGoogleLoading = activeAuthAction != null
+
+    suspend fun runGoogleAuthFlow(action: AuthAction) {
+        googleError = null
+        activeAuthAction = action
+
+        val activity = context.findActivity()
+        if (activity == null) {
+            googleError = "Google sign-in could not start."
+            activeAuthAction = null
+            return
+        }
+
+        try {
+            val googleUser = signInWithGoogle(activity)
+            firebaseAuthWithGoogle(googleUser.idToken)
+
+            when (action) {
+                AuthAction.LOGIN -> onLogin()
+                AuthAction.SIGN_UP -> onCreateAccount(googleUser)
+            }
+        } catch (_: GetCredentialCancellationException) {
+            // User canceled the Google auth sheet.
+        } catch (_: NoCredentialException) {
+            googleError = "No Google account is available on this device."
+        } catch (_: GoogleIdTokenParsingException) {
+            googleError = "Google returned an invalid sign-in response."
+        } catch (e: FirebaseAuthException) {
+            googleError = e.localizedMessage ?: "Firebase sign-in failed."
+        } catch (e: GetCredentialException) {
+            googleError = e.message ?: "Google sign-in failed."
+        } catch (e: Exception) {
+            googleError = e.localizedMessage ?: "Google sign-in failed."
+        } finally {
+            activeAuthAction = null
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -176,14 +219,24 @@ fun LoginScreen(
                 shape = RoundedCornerShape(999.dp),
                 color = JournalBlack,
                 border = BorderStroke(0.dp, androidx.compose.ui.graphics.Color.Transparent),
-                onClick = onLogin
+                onClick = {
+                    if (!isGoogleLoading) {
+                        scope.launch {
+                            runGoogleAuthFlow(AuthAction.LOGIN)
+                        }
+                    }
+                }
             ) {
                 Box(
                     modifier = Modifier.padding(vertical = 18.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "LOG IN",
+                        text = if (activeAuthAction == AuthAction.LOGIN) {
+                            "CONNECTING..."
+                        } else {
+                            "LOG IN"
+                        },
                         style = MaterialTheme.typography.labelLarge,
                         color = JournalWhite
                     )
@@ -198,40 +251,9 @@ fun LoginScreen(
                 color = JournalWhite,
                 border = BorderStroke(0.dp, androidx.compose.ui.graphics.Color.Transparent),
                 onClick = {
-                    scope.launch {
-                        googleError = null
-                        isGoogleLoading = true
-
-                        val activity = context.findActivity()
-                        if (activity == null) {
-                            googleError = "Google sign-in could not start."
-                            isGoogleLoading = false
-                            return@launch
-                        }
-
-                        try {
-                            // Step 1: Get Google ID token from Credential Manager
-                            val googleUser = signInWithGoogle(activity)
-
-                            // Step 2: Exchange Google ID token for Firebase credential
-                            firebaseAuthWithGoogle(googleUser.idToken)
-
-                            // Step 3: Only navigate after Firebase auth succeeds
-                            onCreateAccount(googleUser)
-                        } catch (_: GetCredentialCancellationException) {
-                            // user canceled the Google auth sheet
-                        } catch (_: NoCredentialException) {
-                            googleError = "No Google account is available on this device."
-                        } catch (_: GoogleIdTokenParsingException) {
-                            googleError = "Google returned an invalid sign-in response."
-                        } catch (e: FirebaseAuthException) {
-                            googleError = e.localizedMessage ?: "Firebase sign-in failed."
-                        } catch (e: GetCredentialException) {
-                            googleError = e.message ?: "Google sign-in failed."
-                        } catch (e: Exception) {
-                            googleError = e.localizedMessage ?: "Google sign-in failed."
-                        } finally {
-                            isGoogleLoading = false
+                    if (!isGoogleLoading) {
+                        scope.launch {
+                            runGoogleAuthFlow(AuthAction.SIGN_UP)
                         }
                     }
                 }
@@ -241,7 +263,11 @@ fun LoginScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (isGoogleLoading) "CONNECTING..." else "SIGN UP",
+                        text = if (activeAuthAction == AuthAction.SIGN_UP) {
+                            "CONNECTING..."
+                        } else {
+                            "SIGN UP"
+                        },
                         style = MaterialTheme.typography.labelLarge,
                         color = JournalBlack
                     )

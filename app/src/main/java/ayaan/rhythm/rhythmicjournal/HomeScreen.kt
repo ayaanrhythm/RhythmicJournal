@@ -33,6 +33,7 @@ import ayaan.rhythm.rhythmicjournal.ui.theme.ArtisticWordmarkStyle
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun HomeScreen(
     onOpenDrawer: () -> Unit,
@@ -180,14 +181,6 @@ fun HomeScreen(
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        SolidPillButton(
-            text = "NEW JOURNAL",
-            modifier = Modifier.fillMaxWidth(),
-            onClick = onNewEntry
-        )
     }
 }
 
