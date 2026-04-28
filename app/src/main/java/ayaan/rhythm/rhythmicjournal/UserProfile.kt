@@ -10,7 +10,5 @@ data class UserProfile(
     val email: String = "",
     val birthday: String = "",
     val profileImageUrl: String = "",
-    val profileImageStoragePath: String = "",
-    val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
+    val profileImageStoragePath: String = ""
 )

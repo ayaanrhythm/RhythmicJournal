@@ -3,15 +3,11 @@ package ayaan.rhythm.rhythmicjournal
 import android.net.Uri
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
 import java.util.UUID
-
-private data class UploadedProfilePhoto(
-    val downloadUrl: String,
-    val storagePath: String
-)
 
 class ProfileRepository(
     private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
@@ -20,176 +16,141 @@ class ProfileRepository(
 ) {
 
     suspend fun getOrCreateCurrentUserProfile(): UserProfile {
-        val currentUser = auth.currentUser
-            ?: throw IllegalStateException("No signed-in user found.")
-
-        val uid = currentUser.uid
+        val user = auth.currentUser ?: return UserProfile()
+        val uid = user.uid
         val docRef = firestore.collection("users").document(uid)
         val snapshot = docRef.get().await()
-        val now = System.currentTimeMillis()
 
-        val googleEmail = currentUser.email.orEmpty().trim()
-        val fallbackName = buildFallbackName(currentUser.displayName.orEmpty(), googleEmail)
-        val fallbackUsername = buildFallbackUsername(googleEmail, uid)
+        if (snapshot.exists()) {
+            val patch = mutableMapOf<String, Any>()
 
-        if (!snapshot.exists()) {
-            val newProfile = UserProfile(
-                uid = uid,
-                name = fallbackName,
-                username = fallbackUsername,
-                about = "",
-                school = "",
-                graduationYear = "",
-                email = googleEmail,
-                birthday = "",
-                profileImageUrl = "",
-                profileImageStoragePath = "",
-                createdAt = now,
-                updatedAt = now
-            )
-
-            docRef.set(newProfile).await()
-            return newProfile
-        }
-
-        val existing = snapshot.toObject(UserProfile::class.java)
-            ?: UserProfile(uid = uid)
-
-        val merged = existing.copy(
-            uid = uid,
-            name = existing.name.ifBlank { fallbackName },
-            username = existing.username.ifBlank { fallbackUsername },
-            email = existing.email.ifBlank { googleEmail },
-            createdAt = if (existing.createdAt == 0L) now else existing.createdAt,
-            updatedAt = if (
-                existing.name.isBlank() ||
-                existing.username.isBlank() ||
-                existing.email.isBlank() ||
-                existing.createdAt == 0L
-            ) now else existing.updatedAt
-        )
-
-        if (merged != existing.copy(uid = uid)) {
-            docRef.set(merged).await()
-        }
-
-        return merged
-    }
-
-    suspend fun saveProfile(
-        profile: UserProfile,
-        newPhotoUriString: String? = null
-    ): UserProfile {
-        val currentUser = auth.currentUser
-            ?: throw IllegalStateException("No signed-in user found.")
-
-        val existing = getOrCreateCurrentUserProfile()
-        val uid = currentUser.uid
-
-        var finalPhotoUrl = existing.profileImageUrl
-        var finalPhotoStoragePath = existing.profileImageStoragePath
-
-        if (!newPhotoUriString.isNullOrBlank()) {
-            val uploaded = uploadProfilePhoto(Uri.parse(newPhotoUriString))
-            finalPhotoUrl = uploaded.downloadUrl
-            finalPhotoStoragePath = uploaded.storagePath
-        }
-
-        val now = System.currentTimeMillis()
-
-        val cleanedEmail = profile.email.trim().ifBlank { existing.email }
-        val cleanedName = profile.name.trim().ifBlank {
-            buildFallbackName(currentUser.displayName.orEmpty(), cleanedEmail)
-        }
-        val cleanedUsername = sanitizeUsername(
-            profile.username.trim().ifBlank {
-                buildFallbackUsername(cleanedEmail, uid)
-            },
-            uid = uid
-        )
-
-        val updated = existing.copy(
-            uid = uid,
-            name = cleanedName,
-            username = cleanedUsername,
-            about = profile.about.trim(),
-            school = profile.school.trim(),
-            graduationYear = profile.graduationYear.trim(),
-            email = cleanedEmail,
-            birthday = profile.birthday.trim(),
-            profileImageUrl = finalPhotoUrl,
-            profileImageStoragePath = finalPhotoStoragePath,
-            createdAt = if (existing.createdAt == 0L) now else existing.createdAt,
-            updatedAt = now
-        )
-
-        firestore.collection("users").document(uid).set(updated).await()
-
-        if (
-            !newPhotoUriString.isNullOrBlank() &&
-            existing.profileImageStoragePath.isNotBlank() &&
-            existing.profileImageStoragePath != finalPhotoStoragePath
-        ) {
-            runCatching {
-                storage.reference.child(existing.profileImageStoragePath).delete().await()
+            if (snapshot.getString("uid").isNullOrBlank()) {
+                patch["uid"] = uid
             }
+            if (snapshot.getString("name").isNullOrBlank() && !user.displayName.isNullOrBlank()) {
+                patch["name"] = user.displayName!!
+            }
+            if (snapshot.getString("email").isNullOrBlank() && !user.email.isNullOrBlank()) {
+                patch["email"] = user.email!!
+            }
+            if (snapshot.getString("username").isNullOrBlank()) {
+                patch["username"] = defaultUsername(
+                    displayName = user.displayName.orEmpty(),
+                    email = user.email.orEmpty()
+                )
+            }
+            if (snapshot.getString("graduationYear") == null) {
+                patch["graduationYear"] = ""
+            }
+
+            if (patch.isNotEmpty()) {
+                docRef.set(patch, SetOptions.merge()).await()
+            }
+
+            return docRef.get().await().toObject(UserProfile::class.java) ?: UserProfile()
         }
 
-        return updated
+        val baseProfile = mapOf(
+            "uid" to uid,
+            "name" to user.displayName.orEmpty(),
+            "username" to defaultUsername(
+                displayName = user.displayName.orEmpty(),
+                email = user.email.orEmpty()
+            ),
+            "about" to "",
+            "school" to "",
+            "graduationYear" to "",
+            "email" to user.email.orEmpty(),
+            "birthday" to "",
+            "profileImageUrl" to "",
+            "profileImageStoragePath" to ""
+        )
+
+        docRef.set(baseProfile, SetOptions.merge()).await()
+        return docRef.get().await().toObject(UserProfile::class.java) ?: UserProfile()
     }
 
-    private suspend fun uploadProfilePhoto(localPhotoUri: Uri): UploadedProfilePhoto {
-        val currentUser = auth.currentUser
-            ?: throw IllegalStateException("No signed-in user found.")
+    suspend fun getProfileByUid(uid: String): UserProfile? {
+        val snapshot = firestore.collection("users").document(uid).get().await()
+        return if (snapshot.exists()) snapshot.toObject(UserProfile::class.java) else null
+    }
 
+    suspend fun updateProfile(
+        name: String,
+        username: String,
+        about: String,
+        school: String,
+        graduationYear: String,
+        email: String,
+        birthday: String,
+        profileImageUrl: String? = null
+    ): UserProfile {
+        val currentUser = auth.currentUser ?: error("No signed in user")
         val uid = currentUser.uid
+
+        val updates = mutableMapOf<String, Any>(
+            "uid" to uid,
+            "name" to name.trim(),
+            "username" to username.trim(),
+            "about" to about.trim(),
+            "school" to school.trim(),
+            "graduationYear" to graduationYear.trim(),
+            "email" to email.trim(),
+            "birthday" to birthday.trim()
+        )
+
+        if (profileImageUrl != null) {
+            updates["profileImageUrl"] = profileImageUrl
+        }
+
+        firestore.collection("users")
+            .document(uid)
+            .set(updates, SetOptions.merge())
+            .await()
+
+        return getOrCreateCurrentUserProfile()
+    }
+
+    suspend fun uploadProfileImage(localPhotoUri: Uri): String {
+        val currentUser = auth.currentUser ?: error("No signed in user")
+        val uid = currentUser.uid
+
+        val profileDoc = firestore.collection("users").document(uid).get().await()
+        val oldStoragePath = profileDoc.getString("profileImageStoragePath").orEmpty()
+
         val storagePath = "users/$uid/profile/profile_${System.currentTimeMillis()}_${UUID.randomUUID()}"
         val storageRef = storage.reference.child(storagePath)
 
         storageRef.putFile(localPhotoUri).await()
         val downloadUrl = storageRef.downloadUrl.await().toString()
 
-        return UploadedProfilePhoto(
-            downloadUrl = downloadUrl,
-            storagePath = storagePath
-        )
-    }
+        firestore.collection("users")
+            .document(uid)
+            .set(
+                mapOf(
+                    "profileImageUrl" to downloadUrl,
+                    "profileImageStoragePath" to storagePath
+                ),
+                SetOptions.merge()
+            )
+            .await()
 
-    private fun buildFallbackName(displayName: String, email: String): String {
-        if (displayName.isNotBlank()) return displayName.trim()
-
-        val prefix = email.substringBefore("@", missingDelimiterValue = "Rhythmic User")
-        return prefix
-            .replace(".", " ")
-            .replace("_", " ")
-            .replace("-", " ")
-            .split(" ")
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { part ->
-                part.lowercase(Locale.getDefault()).replaceFirstChar { it.titlecase(Locale.getDefault()) }
+        if (oldStoragePath.isNotBlank() && oldStoragePath != storagePath) {
+            runCatching {
+                storage.reference.child(oldStoragePath).delete().await()
             }
-            .ifBlank { "Rhythmic User" }
+        }
+
+        return downloadUrl
     }
 
-    private fun buildFallbackUsername(email: String, uid: String): String {
-        val prefix = email.substringBefore("@", missingDelimiterValue = "")
-        return sanitizeUsername(prefix, uid)
-    }
-
-    private fun sanitizeUsername(raw: String, uid: String): String {
-        val cleaned = raw
+    private fun defaultUsername(displayName: String, email: String): String {
+        val source = if (displayName.isNotBlank()) displayName else email.substringBefore("@")
+        val cleaned = source
+            .trim()
             .lowercase(Locale.getDefault())
-            .map { char ->
-                when {
-                    char.isLetterOrDigit() -> char
-                    char == '_' || char == '.' -> char
-                    else -> '_'
-                }
-            }
-            .joinToString("")
-            .replace(Regex("_+"), "_")
-            .trim('_', '.')
+            .replace("[^a-z0-9._]".toRegex(), "")
 
-        return if (cleaned.isBlank()) "user${uid.takeLast(6)}" else cleaned
+        return cleaned.ifBlank { "user" }
     }
 }

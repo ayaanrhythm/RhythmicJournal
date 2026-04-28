@@ -1,27 +1,55 @@
 package ayaan.rhythm.rhythmicjournal
 
-sealed class AppRoute(val route: String, val label: String = "", val symbol: String = "") {
-    data object Login : AppRoute("login")
-    data object Home : AppRoute("home", "Home", "⌂")
-    data object Posts : AppRoute("posts", "Posts", "◫")
-    data object NewEntry : AppRoute("new_entry", "Journal", "+")
-    data object Albums : AppRoute("albums", "Albums", "▣")
-    data object Profile : AppRoute("profile", "Profile", "☺")
+import android.net.Uri
 
-    data object Favorites : AppRoute("favorites")
-    data object About : AppRoute("about")
-    data object Settings : AppRoute("settings")
-    data object EditProfile : AppRoute("edit_profile")
+data class AppRoute(
+    val route: String,
+    val label: String = "",
+    val symbol: String = "",
+    private val pathArgs: List<String> = emptyList()
+) {
+    fun createRoute(vararg values: String): String {
+        require(values.size == pathArgs.size) {
+            "Expected ${pathArgs.size} args for route $route but got ${values.size}"
+        }
 
-    data object EntryDetail : AppRoute("entry_detail/{journalId}") {
-        fun createRoute(journalId: String): String = "entry_detail/$journalId"
+        var built = route
+        pathArgs.zip(values).forEach { (key, value) ->
+            built = built.replace("{$key}", Uri.encode(value))
+        }
+        return built
     }
 
-    data object EditEntry : AppRoute("edit_entry/{journalId}") {
-        fun createRoute(journalId: String): String = "edit_entry/$journalId"
-    }
+    companion object {
+        val Login = AppRoute("login", "Login")
+        val Home = AppRoute("home", "Home", "⌂")
+        val Posts = AppRoute("posts", "Posts", "▥")
+        val NewEntry = AppRoute("new_entry", "Journal", "+")
+        val Albums = AppRoute("albums", "Albums", "◫")
+        val Profile = AppRoute("profile", "Profile", "◯")
 
-    data object ShareExport : AppRoute("share_export")
+        val EditEntry = AppRoute(
+            route = "edit_entry/{journalId}",
+            label = "Edit Entry",
+            pathArgs = listOf("journalId")
+        )
+        val EntryDetail = AppRoute(
+            route = "entry_detail/{journalId}",
+            label = "Entry Detail",
+            pathArgs = listOf("journalId")
+        )
+        val AlbumDetail = AppRoute(
+            route = "album_detail/{albumId}",
+            label = "Album Detail",
+            pathArgs = listOf("albumId")
+        )
+
+        val EditProfile = AppRoute("edit_profile", "Edit Profile")
+        val Favorites = AppRoute("favorites", "Favorites")
+        val Settings = AppRoute("settings", "Settings")
+        val About = AppRoute("about", "About")
+        val ShareExport = AppRoute("share_export", "Share")
+    }
 }
 
 val bottomNavItems = listOf(

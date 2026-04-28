@@ -2,23 +2,31 @@ package ayaan.rhythm.rhythmicjournal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Collections
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -33,7 +41,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -48,6 +59,7 @@ import coil3.compose.AsyncImage
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun RhythmicJournalApp(
     store: LocalAppStore,
@@ -60,6 +72,7 @@ fun RhythmicJournalApp(
     val context = LocalContext.current
     val firebaseAuth = remember { FirebaseAuth.getInstance() }
     val profileRepository = remember { ProfileRepository() }
+
     val startDestination =
         if (firebaseAuth.currentUser != null) AppRoute.Home.route else AppRoute.Login.route
 
@@ -68,8 +81,14 @@ fun RhythmicJournalApp(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
-    val showBottomBar = currentRoute in bottomNavItems.map { it.route }
-    val showDrawer = currentRoute != AppRoute.Login.route && currentRoute != AppRoute.EditProfile.route
+    val selectedBottomRoute = when (currentRoute) {
+        AppRoute.AlbumDetail.route -> AppRoute.Albums.route
+        else -> currentRoute
+    }
+
+    val showBottomBar = selectedBottomRoute in bottomNavItems.map { it.route }
+    val showDrawer =
+        currentRoute != AppRoute.Login.route && currentRoute != AppRoute.EditProfile.route
 
     LaunchedEffect(currentRoute, firebaseAuth.currentUser?.uid) {
         if (drawerState.isOpen) {
@@ -93,7 +112,9 @@ fun RhythmicJournalApp(
                 launchSingleTop = true
                 restoreState = true
                 if (route in bottomNavItems.map { it.route }) {
-                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
                 }
             }
         }
@@ -125,14 +146,12 @@ fun RhythmicJournalApp(
                             style = MaterialTheme.typography.headlineMedium,
                             modifier = Modifier
                                 .padding(start = 8.dp)
-                                .clickable {
-                                    scope.launch { drawerState.close() }
-                                }
+                                .clickable { scope.launch { drawerState.close() } }
                         )
 
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.padding(top = 20.dp))
                         JournalWordmark()
-                        Spacer(modifier = Modifier.height(28.dp))
+                        Spacer(modifier = Modifier.padding(top = 28.dp))
 
                         DrawerMenuItem(text = "Profile") { navigateTo(AppRoute.Profile.route) }
                         DrawerMenuItem(text = "Favorites") { navigateTo(AppRoute.Favorites.route) }
@@ -163,11 +182,13 @@ fun RhythmicJournalApp(
         }
     ) {
         Scaffold(
+            modifier = Modifier.fillMaxSize(),
             containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 if (showBottomBar) {
                     JournalBottomBar(
-                        currentRoute = currentRoute,
+                        currentRoute = selectedBottomRoute,
                         navController = navController,
                         currentProfileImageUrl = currentProfileImageUrl
                     )
@@ -177,7 +198,14 @@ fun RhythmicJournalApp(
             NavHost(
                 navController = navController,
                 startDestination = startDestination,
-                modifier = Modifier.padding(innerPadding)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(
+                        start = innerPadding.calculateStartPadding(LayoutDirection.Ltr),
+                        top = innerPadding.calculateTopPadding(),
+                        end = innerPadding.calculateEndPadding(LayoutDirection.Ltr),
+                        bottom = 0.dp
+                    )
             ) {
                 composable(AppRoute.Login.route) {
                     LoginScreen(
@@ -214,9 +242,7 @@ fun RhythmicJournalApp(
 
                 composable(AppRoute.Home.route) {
                     HomeScreen(
-                        onOpenDrawer = {
-                            scope.launch { drawerState.open() }
-                        },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenEntry = { journalId ->
                             navController.navigate(AppRoute.EntryDetail.createRoute(journalId))
                         },
@@ -225,7 +251,26 @@ fun RhythmicJournalApp(
                 }
 
                 composable(AppRoute.Posts.route) {
-                    PostsScreen()
+                    PostsScreen(
+                        onBack = {
+                            val popped = navController.popBackStack()
+                            if (!popped) {
+                                navController.navigate(AppRoute.Home.route) {
+                                    popUpTo(navController.graph.findStartDestination().id)
+                                    launchSingleTop = true
+                                }
+                            }
+                        },
+                        onOpenEntry = { journalId ->
+                            navController.navigate(AppRoute.EntryDetail.createRoute(journalId))
+                        },
+                        onEditPost = { journalId ->
+                            navController.navigate(AppRoute.EditEntry.createRoute(journalId))
+                        },
+                        onOpenAlbum = { albumId ->
+                            navController.navigate(AppRoute.AlbumDetail.createRoute(albumId))
+                        }
+                    )
                 }
 
                 composable(AppRoute.NewEntry.route) {
@@ -236,14 +281,17 @@ fun RhythmicJournalApp(
                 }
 
                 composable(AppRoute.Albums.route) {
-                    AlbumsScreen()
+                    AlbumsScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenAlbum = { albumId ->
+                            navController.navigate(AppRoute.AlbumDetail.createRoute(albumId))
+                        }
+                    )
                 }
 
                 composable(AppRoute.Profile.route) {
                     ProfileScreen(
-                        onOpenDrawer = {
-                            scope.launch { drawerState.open() }
-                        },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenEditProfile = {
                             navController.navigate(AppRoute.EditProfile.route)
                         },
@@ -295,7 +343,10 @@ fun RhythmicJournalApp(
                             navController.navigate(AppRoute.EditEntry.createRoute(selectedJournalId))
                         },
                         onShare = { navController.navigate(AppRoute.ShareExport.route) },
-                        onDeleted = { returnToHome() }
+                        onDeleted = { returnToHome() },
+                        onOpenAlbum = { albumId ->
+                            navController.navigate(AppRoute.AlbumDetail.createRoute(albumId))
+                        }
                     )
                 }
 
@@ -311,6 +362,23 @@ fun RhythmicJournalApp(
                         journalId = journalId,
                         onCancel = { navController.popBackStack() },
                         onSaveSuccess = { returnToHome() }
+                    )
+                }
+
+                composable(
+                    route = AppRoute.AlbumDetail.route,
+                    arguments = listOf(
+                        navArgument("albumId") { type = NavType.StringType }
+                    )
+                ) { entry ->
+                    val albumId = entry.arguments?.getString("albumId").orEmpty()
+
+                    AlbumDetailScreen(
+                        albumId = albumId,
+                        onBack = { navController.popBackStack() },
+                        onOpenEntry = { journalId ->
+                            navController.navigate(AppRoute.EntryDetail.createRoute(journalId))
+                        }
                     )
                 }
 
@@ -331,60 +399,119 @@ fun JournalBottomBar(
     navController: NavHostController,
     currentProfileImageUrl: String
 ) {
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp
+    val barColor = MaterialTheme.colorScheme.surface
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = barColor,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
-        bottomNavItems.forEach { item ->
-            NavigationBarItem(
-                selected = currentRoute == item.route,
-                onClick = {
-                    if (currentRoute != item.route) {
-                        navController.navigate(item.route) {
-                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    }
-                },
-                icon = {
-                    if (item == AppRoute.Profile && currentProfileImageUrl.isNotBlank()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            bottomNavItems.forEach { item ->
+                val selected = currentRoute == item.route
+
+                Box(
+                    modifier = Modifier
+                        .width(72.dp)
+                        .clickable {
+                            if (currentRoute != item.route) {
+                                navController.navigate(item.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
                         Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = if (selected) {
+                                Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                                    )
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            } else {
+                                Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            },
                             contentAlignment = Alignment.Center
                         ) {
-                            AsyncImage(
-                                model = currentProfileImageUrl,
-                                contentDescription = "Profile",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            when {
+                                item == AppRoute.Profile && currentProfileImageUrl.isNotBlank() -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surface),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        AsyncImage(
+                                            model = currentProfileImageUrl,
+                                            contentDescription = "Profile",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+
+                                item == AppRoute.Albums -> {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Collections,
+                                        contentDescription = item.label,
+                                        modifier = Modifier.size(22.dp),
+                                        tint = if (selected) {
+                                            MaterialTheme.colorScheme.onBackground
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+
+                                else -> {
+                                    Text(
+                                        text = item.symbol,
+                                        fontSize = 22.sp,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.onBackground
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
                         }
-                    } else {
+
+                        Spacer(modifier = Modifier.padding(top = 2.dp))
+
                         Text(
-                            text = item.symbol,
-                            style = MaterialTheme.typography.titleLarge
+                            text = item.label,
+                            fontSize = 11.sp,
+                            lineHeight = 11.sp,
+                            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onBackground
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     }
-                },
-                label = {
-                    Text(
-                        text = item.label,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                },
-                alwaysShowLabel = true,
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.onBackground,
-                    selectedTextColor = MaterialTheme.colorScheme.onBackground,
-                    indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
+                }
+            }
         }
     }
 }

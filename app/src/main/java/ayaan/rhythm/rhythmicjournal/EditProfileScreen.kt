@@ -66,7 +66,6 @@ fun EditProfileScreen(
     var email by rememberSaveable { mutableStateOf("") }
     var birthday by rememberSaveable { mutableStateOf("") }
     var profileImageUrl by rememberSaveable { mutableStateOf("") }
-    var profileImageStoragePath by rememberSaveable { mutableStateOf("") }
     var selectedPhotoUri by rememberSaveable { mutableStateOf("") }
 
     var isLoading by remember { mutableStateOf(true) }
@@ -101,7 +100,6 @@ fun EditProfileScreen(
             email = profile.email
             birthday = profile.birthday
             profileImageUrl = profile.profileImageUrl
-            profileImageStoragePath = profile.profileImageStoragePath
         } catch (e: Exception) {
             errorMessage = e.localizedMessage ?: "Could not load profile."
         } finally {
@@ -123,20 +121,28 @@ fun EditProfileScreen(
             errorMessage = null
 
             try {
-                profileRepository.saveProfile(
-                    profile = UserProfile(
-                        name = name,
-                        username = username,
-                        about = about,
-                        school = school,
-                        graduationYear = graduationYear,
-                        email = email,
-                        birthday = birthday,
-                        profileImageUrl = profileImageUrl,
-                        profileImageStoragePath = profileImageStoragePath
-                    ),
-                    newPhotoUriString = selectedPhotoUri.takeIf { it.isNotBlank() }
+                val uploadedProfileImageUrl =
+                    if (selectedPhotoUri.isNotBlank()) {
+                        profileRepository.uploadProfileImage(Uri.parse(selectedPhotoUri))
+                    } else {
+                        null
+                    }
+
+                profileRepository.updateProfile(
+                    name = name.trim(),
+                    username = username.trim(),
+                    about = about.trim(),
+                    school = school.trim(),
+                    graduationYear = graduationYear.trim(),
+                    email = email.trim(),
+                    birthday = birthday.trim(),
+                    profileImageUrl = uploadedProfileImageUrl
                 )
+
+                if (uploadedProfileImageUrl != null) {
+                    profileImageUrl = uploadedProfileImageUrl
+                }
+
                 onClose()
             } catch (e: Exception) {
                 errorMessage = e.localizedMessage ?: "Could not save profile."
@@ -152,15 +158,14 @@ fun EditProfileScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 18.dp)
+            .padding(horizontal = 20.dp, vertical = 10.dp)
     ) {
-        Text(
-            text = "Edit Profile",
-            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onBackground
+        AppScreenHeader(
+            title = "Edit Profile",
+            onBack = onClose
         )
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
         Box(
             modifier = Modifier.fillMaxWidth(),
@@ -295,8 +300,7 @@ fun EditProfileScreen(
                 modifier = Modifier
                     .weight(1f)
                     .height(52.dp),
-                shape = RoundedCornerShape(999.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                shape = RoundedCornerShape(999.dp)
             ) {
                 Text(
                     text = "Cancel",

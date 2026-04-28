@@ -1,594 +1,650 @@
 package ayaan.rhythm.rhythmicjournal
 
-import android.content.Intent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import kotlinx.coroutines.launch
 
-private const val PROFILE_TAB_RECENT = "RECENT"
-private const val PROFILE_TAB_ALBUMS = "ALBUMS"
+private enum class ProfileTab {
+    RECENT,
+    ALBUMS
+}
 
-@OptIn(ExperimentalMaterial3Api::class)
+private data class ProfileAlbumUi(
+    val albumId: String,
+    val albumName: String,
+    val count: Int,
+    val coverUrls: List<String>
+)
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ProfileScreen(
     onOpenDrawer: () -> Unit,
     onOpenEditProfile: () -> Unit,
     onOpenEntry: (String) -> Unit
 ) {
-    val context = LocalContext.current
     val profileRepository = remember { ProfileRepository() }
     val journalRepository = remember { JournalRepository() }
-    val scope = rememberCoroutineScope()
-    val lifecycleOwner = LocalLifecycleOwner.current
 
-    var profile by remember { mutableStateOf<UserProfile?>(null) }
-    var journals by remember { mutableStateOf<List<JournalEntry>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var selectedTab by rememberSaveable { mutableStateOf(PROFILE_TAB_RECENT) }
-    var showMenu by rememberSaveable { mutableStateOf(false) }
+    var profile by remember { mutableStateOf(UserProfile()) }
+    val posts = remember { mutableStateListOf<JournalEntry>() }
 
-    fun loadProfileData() {
-        scope.launch {
-            isLoading = true
-            errorMessage = null
-
-            try {
-                profile = profileRepository.getOrCreateCurrentUserProfile()
-                journals = journalRepository.getCurrentUserJournals()
-            } catch (e: Exception) {
-                errorMessage = e.localizedMessage ?: "Could not load profile."
-            } finally {
-                isLoading = false
-            }
-        }
-    }
+    var selectedTab by remember { mutableStateOf(ProfileTab.RECENT) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        loadProfileData()
+        loading = true
+        error = null
+        try {
+            profile = profileRepository.getOrCreateCurrentUserProfile()
+            posts.clear()
+            posts.addAll(
+                journalRepository.getCurrentUserJournals()
+                    .sortedByDescending { it.createdAt }
+            )
+        } catch (e: Exception) {
+            error = e.localizedMessage ?: "Failed to load profile."
+        } finally {
+            loading = false
+        }
     }
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                loadProfileData()
+    val albums = remember(posts.toList()) {
+        posts
+            .filter { it.albumId.isNotBlank() || it.album.isNotBlank() }
+            .groupBy { if (it.albumId.isNotBlank()) it.albumId else it.album }
+            .map { (_, groupedPosts) ->
+                val first = groupedPosts.first()
+                ProfileAlbumUi(
+                    albumId = first.albumId,
+                    albumName = first.album.ifBlank { "Album" },
+                    count = groupedPosts.size,
+                    coverUrls = groupedPosts
+                        .sortedByDescending { it.createdAt }
+                        .mapNotNull { entry -> entry.photoUrl.takeIf { url -> url.isNotBlank() } }
+                        .take(4)
+                )
             }
-        }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
+            .sortedBy { it.albumName.lowercase() }
     }
 
-    if (showMenu) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Fixed(2),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+        verticalItemSpacing = 8.dp,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(
+            start = 14.dp,
+            end = 14.dp,
+            top = 8.dp,
+            bottom = 100.dp
+        )
+    ) {
+        item(span = StaggeredGridItemSpan.FullLine) {
+            ProfileTopBar(
+                username = profile.username.ifBlank { "ayaanrhythm" },
+                onOpenDrawer = onOpenDrawer,
+                onMore = onOpenEditProfile
+            )
+        }
 
-        ModalBottomSheet(
-            onDismissRequest = { showMenu = false },
-            sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.background,
-            contentColor = MaterialTheme.colorScheme.onBackground
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 8.dp)
+        item(span = StaggeredGridItemSpan.FullLine) {
+            Spacer(modifier = Modifier.height(2.dp))
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            CompactProfileHeader(profile = profile)
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            ButtonsRow(
+                onMyGalleries = { selectedTab = ProfileTab.RECENT },
+                onEditProfile = onOpenEditProfile
+            )
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            Spacer(modifier = Modifier.height(1.dp))
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            HorizontalDivider(
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.20f)
+            )
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            Spacer(modifier = Modifier.height(2.dp))
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                ProfileMenuItem("Edit Profile") {
-                    showMenu = false
-                    onOpenEditProfile()
+                ProfileTabItem(
+                    text = "RECENT",
+                    selected = selectedTab == ProfileTab.RECENT,
+                    onClick = { selectedTab = ProfileTab.RECENT }
+                )
+
+                ProfileTabItem(
+                    text = "ALBUMS",
+                    selected = selectedTab == ProfileTab.ALBUMS,
+                    onClick = { selectedTab = ProfileTab.ALBUMS }
+                )
+            }
+        }
+
+        item(span = StaggeredGridItemSpan.FullLine) {
+            Spacer(modifier = Modifier.height(2.dp))
+        }
+
+        when {
+            loading -> {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Text(
+                        text = "Loading...",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
+            }
 
-                ProfileMenuItem("Share Profile") {
-                    val currentProfile = profile
-                    val shareText = buildString {
-                        append("Check out ")
-                        append(currentProfile?.name?.ifBlank { "my" } ?: "my")
-                        append(" profile on RhythmicJournal")
-                        currentProfile?.username?.takeIf { it.isNotBlank() }?.let {
-                            append(" (@")
-                            append(it)
-                            append(")")
-                        }
-                    }
-
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, shareText)
-                    }
-
-                    context.startActivity(Intent.createChooser(shareIntent, "Share profile"))
-                    showMenu = false
+            error != null -> {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Text(
+                        text = error ?: "Something went wrong.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
+            }
 
-                ProfileMenuItem("Create New Album") {
-                    selectedTab = PROFILE_TAB_ALBUMS
-                    showMenu = false
+            selectedTab == ProfileTab.RECENT && posts.isEmpty() -> {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Text(
+                        text = "No posts yet.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
+            }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                ProfileMenuItem("Cancel") {
-                    showMenu = false
+            selectedTab == ProfileTab.RECENT -> {
+                items(
+                    items = posts.sortedByDescending { it.createdAt },
+                    key = { it.id }
+                ) { post ->
+                    RecentPostTile(
+                        journal = post,
+                        onClick = { onOpenEntry(post.id) }
+                    )
                 }
+            }
 
-                Spacer(modifier = Modifier.height(12.dp))
+            selectedTab == ProfileTab.ALBUMS && albums.isEmpty() -> {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Text(
+                        text = "No albums yet.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            }
+
+            else -> {
+                items(
+                    items = albums,
+                    key = { if (it.albumId.isNotBlank()) it.albumId else it.albumName }
+                ) { album ->
+                    AlbumCard(album = album)
+                }
             }
         }
     }
+}
 
-    ScreenContainer(
-        backgroundColor = MaterialTheme.colorScheme.background,
-        horizontalPadding = 20.dp,
-        verticalPadding = 18.dp
+@Composable
+private fun ProfileTopBar(
+    username: String,
+    onOpenDrawer: () -> Unit,
+    onMore: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 2.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Menu,
+            contentDescription = "Menu",
+            tint = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .size(28.dp)
+                .clickable { onOpenDrawer() }
+        )
+
+        Text(
+            text = username.ifBlank { "ayaanrhythm" },
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
+            modifier = Modifier.align(Alignment.Center)
+        )
+
+        Icon(
+            imageVector = Icons.Outlined.MoreHoriz,
+            contentDescription = "More",
+            tint = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .size(24.dp)
+                .clickable { onMore() }
+        )
+    }
+}
+
+@Composable
+private fun CompactProfileHeader(
+    profile: UserProfile
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "☰",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.clickable(onClick = onOpenDrawer)
-            )
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = profile?.username?.ifBlank { "profile" } ?: "profile",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onBackground
+            if (profile.profileImageUrl.isNotBlank()) {
+                AsyncImage(
+                    model = profile.profileImageUrl,
+                    contentDescription = "Profile image",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(90.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(90.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                 )
             }
 
+            Spacer(modifier = Modifier.width(12.dp))
+
             Text(
-                text = "⋯",
-                style = MaterialTheme.typography.headlineMedium,
+                text = profile.name.ifBlank { "Ayaan Rhythm" },
                 color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.clickable { showMenu = true }
+                fontWeight = FontWeight.Medium,
+                fontSize = 30.sp,
+                lineHeight = 32.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
             )
         }
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-        when {
-            isLoading -> {
-                SoftCard {
-                    Text(
-                        text = "Loading profile...",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            errorMessage != null -> {
-                SoftCard {
-                    Text(
-                        text = errorMessage ?: "Could not load profile.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-
-            profile != null -> {
-                val currentProfile = profile!!
-                val albums = journals
-                    .filter { it.album.isNotBlank() }
-                    .groupBy { it.album.trim() }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    ProfileAvatarLarge(
-                        imageUrl = currentProfile.profileImageUrl,
-                        name = currentProfile.name
-                    )
-
-                    Spacer(modifier = Modifier.width(18.dp))
-
-                    Column(
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = currentProfile.name.ifBlank { "Your Name" },
-                            style = MaterialTheme.typography.headlineMedium.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (currentProfile.about.isNotBlank()) {
-                    Text(
-                        text = currentProfile.about,
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Normal),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                if (currentProfile.school.isNotBlank()) {
-                    Text(
-                        text = buildSchoolLine(currentProfile),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val buttonWidth = maxWidth / 2
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        SmallProfilePillButton(
-                            text = "MY GALLERIES",
-                            filled = true,
-                            width = buttonWidth,
-                            onClick = { selectedTab = PROFILE_TAB_RECENT }
-                        )
-
-                        SmallProfilePillButton(
-                            text = "EDIT PROFILE",
-                            filled = false,
-                            width = buttonWidth,
-                            onClick = onOpenEditProfile
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
-                    SlimProfileTab(
-                        text = "RECENT",
-                        selected = selectedTab == PROFILE_TAB_RECENT,
-                        onClick = { selectedTab = PROFILE_TAB_RECENT }
-                    )
-
-                    SlimProfileTab(
-                        text = "ALBUMS",
-                        selected = selectedTab == PROFILE_TAB_ALBUMS,
-                        onClick = { selectedTab = PROFILE_TAB_ALBUMS }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                if (selectedTab == PROFILE_TAB_RECENT) {
-                    if (journals.isEmpty()) {
-                        Text(
-                            text = "No posts yet.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                            val gap = 10.dp
-                            val tileWidth = (maxWidth - gap) / 2
-
-                            journals.chunked(2).forEach { rowItems ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(gap)
-                                ) {
-                                    rowItems.forEach { journal ->
-                                        RecentPhotoTile(
-                                            journal = journal,
-                                            tileWidth = tileWidth,
-                                            onClick = {
-                                                if (journal.id.isNotBlank()) {
-                                                    onOpenEntry(journal.id)
-                                                }
-                                            }
-                                        )
-                                    }
-
-                                    if (rowItems.size == 1) {
-                                        Spacer(modifier = Modifier.width(tileWidth))
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(10.dp))
-                            }
-                        }
-                    }
-                } else {
-                    if (albums.isEmpty()) {
-                        Text(
-                            text = "No albums yet.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                            val gap = 10.dp
-                            val tileWidth = (maxWidth - gap) / 2
-
-                            albums.entries.toList().chunked(2).forEach { rowItems ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(gap)
-                                ) {
-                                    rowItems.forEach { entry ->
-                                        AlbumTile(
-                                            albumName = entry.key,
-                                            entries = entry.value,
-                                            tileWidth = tileWidth
-                                        )
-                                    }
-
-                                    if (rowItems.size == 1) {
-                                        Spacer(modifier = Modifier.width(tileWidth))
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(12.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfileAvatarLarge(
-    imageUrl: String,
-    name: String
-) {
-    Box(
-        modifier = Modifier
-            .size(96.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center
-    ) {
-        if (imageUrl.isNotBlank()) {
-            AsyncImage(
-                model = imageUrl,
-                contentDescription = "Profile image",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
-        } else {
+        if (profile.about.isNotBlank()) {
             Text(
-                text = profileInitials(name),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = profile.about,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 15.sp,
+                lineHeight = 18.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+        }
+
+        val schoolLine = buildSchoolLine(
+            school = profile.school,
+            graduationYear = profile.graduationYear
+        )
+
+        if (schoolLine.isNotBlank()) {
+            Text(
+                text = "🎓 $schoolLine",
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+                lineHeight = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
 }
 
 @Composable
-private fun SmallProfilePillButton(
+private fun ButtonsRow(
+    onMyGalleries: () -> Unit,
+    onEditProfile: () -> Unit
+) {
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val sidePadding = 28.dp
+    val spacing = 10.dp
+    val buttonWidth = (screenWidth - sidePadding - spacing) / 2
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+        PillButton(
+            text = "MY GALLERIES",
+            selected = true,
+            width = buttonWidth,
+            onClick = onMyGalleries
+        )
+
+        PillButton(
+            text = "EDIT PROFILE",
+            selected = false,
+            width = buttonWidth,
+            onClick = onEditProfile
+        )
+    }
+}
+
+@Composable
+private fun PillButton(
     text: String,
-    filled: Boolean,
-    width: androidx.compose.ui.unit.Dp,
+    selected: Boolean,
+    width: Dp,
     onClick: () -> Unit
 ) {
     Surface(
         modifier = Modifier
             .width(width)
-            .clickable(onClick = onClick),
+            .height(44.dp)
+            .clickable { onClick() },
         shape = RoundedCornerShape(999.dp),
-        color = if (filled) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.background,
-        border = if (filled) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 11.dp),
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = if (filled) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onBackground,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.background,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
         )
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = text,
+                color = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+        }
     }
 }
 
 @Composable
-private fun SlimProfileTab(
+private fun ProfileTabItem(
     text: String,
     selected: Boolean,
     onClick: () -> Unit
 ) {
     Column(
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.clickable { onClick() }
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.titleMedium.copy(
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-            ),
-            color = if (selected) MaterialTheme.colorScheme.onBackground
-            else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (selected) {
+                MaterialTheme.colorScheme.onBackground
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp
         )
 
-        Spacer(modifier = Modifier.height(5.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
-        Box(
-            modifier = Modifier
-                .width(42.dp)
-                .height(2.dp)
-                .background(
-                    if (selected) MaterialTheme.colorScheme.onBackground
-                    else androidx.compose.ui.graphics.Color.Transparent
-                )
-        )
-    }
-}
-
-@Composable
-private fun RecentPhotoTile(
-    journal: JournalEntry,
-    tileWidth: androidx.compose.ui.unit.Dp,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .width(tileWidth)
-            .clickable(onClick = onClick)
-    ) {
-        if (journal.photoUrl.isNotBlank()) {
-            AsyncImage(
-                model = journal.photoUrl,
-                contentDescription = "Journal photo",
-                contentScale = ContentScale.Crop,
+        if (selected) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.72f)
-            )
-        } else {
-            MiniPhoto(
-                text = "PHOTO",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.72f)
+                    .width(52.dp)
+                    .height(2.dp)
+                    .background(MaterialTheme.colorScheme.onBackground)
             )
         }
     }
 }
 
 @Composable
-private fun AlbumTile(
-    albumName: String,
-    entries: List<JournalEntry>,
-    tileWidth: androidx.compose.ui.unit.Dp
+private fun RecentPostTile(
+    journal: JournalEntry,
+    onClick: () -> Unit
 ) {
-    val coverPhoto = entries.firstOrNull { it.photoUrl.isNotBlank() }?.photoUrl.orEmpty()
+    if (journal.photoUrl.isNotBlank()) {
+        AsyncImage(
+            model = journal.photoUrl,
+            contentDescription = journal.title.ifBlank { "Post" },
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .clickable { onClick() }
+        )
+    } else {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(220.dp)
+                .clickable { onClick() },
+            shape = RoundedCornerShape(4.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = journal.title.ifBlank { "No Image" },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlbumCard(
+    album: ProfileAlbumUi
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.20f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            AlbumCoverGrid(album = album)
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = album.albumName.ifBlank { "Album" },
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            Text(
+                text = "${album.count} ${if (album.count == 1) "entry" else "entries"}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun AlbumCoverGrid(
+    album: ProfileAlbumUi
+) {
+    val urls = album.coverUrls.take(4)
+
+    if (urls.isEmpty()) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(150.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = "COVER",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+        return
+    }
+
+    if (urls.size == 1) {
+        AsyncImage(
+            model = urls.first(),
+            contentDescription = "Album cover",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(150.dp)
+                .clip(RoundedCornerShape(14.dp))
+        )
+        return
+    }
+
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val sidePadding = 28.dp
+    val gap = 10.dp + 4.dp
+    val cardPadding = 24.dp
+    val columnWidth = (screenWidth - sidePadding - 10.dp) / 2
+    val innerWidth = columnWidth - cardPadding
+    val tileSize = (innerWidth - 4.dp) / 2
 
     Column(
-        modifier = Modifier.width(tileWidth)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (coverPhoto.isNotBlank()) {
-            AsyncImage(
-                model = coverPhoto,
-                contentDescription = "Album cover",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.72f)
-            )
-        } else {
-            MiniPhoto(
-                text = "ALBUM",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(0.72f)
-            )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            AlbumImageSlot(url = urls.getOrNull(0), size = tileSize)
+            AlbumImageSlot(url = urls.getOrNull(1), size = tileSize)
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = albumName,
-            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-
-        Spacer(modifier = Modifier.height(2.dp))
-
-        Text(
-            text = "${entries.size} posts",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            AlbumImageSlot(url = urls.getOrNull(2), size = tileSize)
+            AlbumImageSlot(url = urls.getOrNull(3), size = tileSize)
+        }
     }
 }
 
 @Composable
-private fun ProfileMenuItem(
-    text: String,
-    onClick: () -> Unit
+private fun AlbumImageSlot(
+    url: String?,
+    size: Dp
 ) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-        color = MaterialTheme.colorScheme.onBackground,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 16.dp)
-    )
-}
-
-private fun profileInitials(name: String): String {
-    val parts = name.trim().split(" ").filter { it.isNotBlank() }.take(2)
-    if (parts.isEmpty()) return "RJ"
-    return parts.joinToString("") { it.first().uppercase() }
-}
-
-private fun buildSchoolLine(profile: UserProfile): String {
-    val gradYear = profile.graduationYear.trim()
-    val suffix = when {
-        gradYear.length >= 2 -> " '${gradYear.takeLast(2)}"
-        gradYear.isNotBlank() -> " '$gradYear"
-        else -> ""
+    if (url.isNullOrBlank()) {
+        Spacer(modifier = Modifier.size(size))
+    } else {
+        AsyncImage(
+            model = url,
+            contentDescription = "Album image",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .clip(RoundedCornerShape(10.dp))
+        )
     }
-    return "🎓 ${profile.school}$suffix"
+}
+
+private fun buildSchoolLine(
+    school: String,
+    graduationYear: String
+): String {
+    val schoolText = school.trim()
+    val yearText = graduationYear.trim()
+
+    if (schoolText.isBlank() && yearText.isBlank()) return ""
+    if (schoolText.isNotBlank() && yearText.isBlank()) return schoolText
+    if (schoolText.isBlank() && yearText.isNotBlank()) return yearText
+
+    val shortenedYear = if (yearText.length == 4) {
+        yearText.takeLast(2)
+    } else {
+        yearText
+    }
+
+    return "$schoolText '$shortenedYear"
 }

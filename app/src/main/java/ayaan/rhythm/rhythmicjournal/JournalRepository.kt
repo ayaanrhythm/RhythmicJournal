@@ -10,7 +10,8 @@ import java.util.UUID
 
 data class UploadedPhoto(
     val downloadUrl: String,
-    val storagePath: String
+    val storagePath: String,
+    val fileSizeBytes: Long
 )
 
 class JournalRepository(
@@ -29,10 +30,13 @@ class JournalRepository(
 
         storageRef.putFile(localPhotoUri).await()
         val downloadUrl = storageRef.downloadUrl.await().toString()
+        val metadata = storageRef.metadata.await()
+        val fileSizeBytes = metadata.sizeBytes
 
         return UploadedPhoto(
             downloadUrl = downloadUrl,
-            storagePath = storagePath
+            storagePath = storagePath,
+            fileSizeBytes = fileSizeBytes
         )
     }
 
@@ -41,14 +45,17 @@ class JournalRepository(
         reflection: String,
         photoUrl: String = "",
         photoStoragePath: String = "",
+        imageSizeBytes: Long = 0L,
         entryDateText: String,
         locationName: String,
         mood: String,
-        album: String,
         tags: List<String>,
+        albumId: String = "",
+        album: String = "",
         latitude: Double? = null,
         longitude: Double? = null,
         isFavorite: Boolean = false,
+        isLoved: Boolean = false,
         isDraft: Boolean = false
     ): JournalEntry {
         val currentUser = auth.currentUser
@@ -70,14 +77,17 @@ class JournalRepository(
             reflection = reflection,
             photoUrl = photoUrl,
             photoStoragePath = photoStoragePath,
+            imageSizeBytes = imageSizeBytes,
             entryDateText = entryDateText,
             locationName = locationName,
             mood = mood,
-            album = album,
             tags = tags,
+            albumId = albumId,
+            album = album,
             latitude = latitude,
             longitude = longitude,
             isFavorite = isFavorite,
+            isLoved = isLoved,
             isDraft = isDraft,
             createdAt = now,
             updatedAt = now
@@ -85,6 +95,66 @@ class JournalRepository(
 
         journalDocRef.set(journalEntry).await()
         return journalEntry
+    }
+
+    suspend fun updateJournal(
+        journalId: String,
+        title: String,
+        reflection: String,
+        photoUrl: String = "",
+        photoStoragePath: String = "",
+        imageSizeBytes: Long = 0L,
+        entryDateText: String,
+        locationName: String,
+        mood: String,
+        tags: List<String>,
+        albumId: String = "",
+        album: String = ""
+    ): JournalEntry {
+        val currentUser = auth.currentUser
+            ?: throw IllegalStateException("No signed-in user found.")
+
+        val uid = currentUser.uid
+        val journalDocRef = firestore
+            .collection("users")
+            .document(uid)
+            .collection("journals")
+            .document(journalId)
+
+        val existing = journalDocRef.get().await().toObject(JournalEntry::class.java)
+            ?: throw IllegalStateException("Journal not found.")
+
+        val finalImageSizeBytes = if (imageSizeBytes > 0L) imageSizeBytes else existing.imageSizeBytes
+
+        val updatedJournal = existing.copy(
+            id = journalId,
+            userId = uid,
+            title = title,
+            reflection = reflection,
+            photoUrl = photoUrl,
+            photoStoragePath = photoStoragePath,
+            imageSizeBytes = finalImageSizeBytes,
+            entryDateText = entryDateText,
+            locationName = locationName,
+            mood = mood,
+            tags = tags,
+            albumId = albumId,
+            album = album,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        journalDocRef.set(updatedJournal).await()
+
+        if (
+            existing.photoStoragePath.isNotBlank() &&
+            existing.photoStoragePath != photoStoragePath
+        ) {
+            runCatching {
+                storage.reference.child(existing.photoStoragePath).delete().await()
+            }
+        }
+
+        return updatedJournal
     }
 
     suspend fun getCurrentUserJournals(): List<JournalEntry> {
@@ -158,58 +228,88 @@ class JournalRepository(
             .await()
     }
 
-    suspend fun updateJournal(
-        journalId: String,
-        title: String,
-        reflection: String,
-        photoUrl: String = "",
-        photoStoragePath: String = "",
-        entryDateText: String,
-        locationName: String,
-        mood: String,
-        album: String,
-        tags: List<String>
-    ): JournalEntry {
+    suspend fun setLoved(journalId: String, isLoved: Boolean) {
         val currentUser = auth.currentUser
             ?: throw IllegalStateException("No signed-in user found.")
 
         val uid = currentUser.uid
-        val journalDocRef = firestore
+
+        firestore
+            .collection("users")
+            .document(uid)
+            .collection("journals")
+            .document(journalId)
+            .update(
+                mapOf(
+                    "isLoved" to isLoved,
+                    "updatedAt" to System.currentTimeMillis()
+                )
+            )
+            .await()
+    }
+
+    suspend fun getComments(journalId: String): List<JournalComment> {
+        val currentUser = auth.currentUser ?: return emptyList()
+        val uid = currentUser.uid
+
+        val snapshot = firestore
+            .collection("users")
+            .document(uid)
+            .collection("journals")
+            .document(journalId)
+            .collection("comments")
+            .orderBy("createdAt", Query.Direction.ASCENDING)
+            .get()
+            .await()
+
+        return snapshot.documents.mapNotNull { document ->
+            document.toObject(JournalComment::class.java)?.copy(id = document.id)
+        }
+    }
+
+    suspend fun addComment(journalId: String, text: String): JournalComment {
+        val currentUser = auth.currentUser
+            ?: throw IllegalStateException("No signed-in user found.")
+
+        val uid = currentUser.uid
+        val trimmedText = text.trim()
+
+        if (trimmedText.isBlank()) {
+            throw IllegalArgumentException("Comment cannot be empty.")
+        }
+
+        val journalRef = firestore
             .collection("users")
             .document(uid)
             .collection("journals")
             .document(journalId)
 
-        val existing = journalDocRef.get().await().toObject(JournalEntry::class.java)
-            ?: throw IllegalStateException("Journal not found.")
-
-        val updatedJournal = existing.copy(
-            id = journalId,
-            userId = uid,
-            title = title,
-            reflection = reflection,
-            photoUrl = photoUrl,
-            photoStoragePath = photoStoragePath,
-            entryDateText = entryDateText,
-            locationName = locationName,
-            mood = mood,
-            album = album,
-            tags = tags,
-            updatedAt = System.currentTimeMillis()
-        )
-
-        journalDocRef.set(updatedJournal).await()
-
-        if (
-            existing.photoStoragePath.isNotBlank() &&
-            existing.photoStoragePath != photoStoragePath
-        ) {
-            runCatching {
-                storage.reference.child(existing.photoStoragePath).delete().await()
-            }
+        val journalSnapshot = journalRef.get().await()
+        if (!journalSnapshot.exists()) {
+            throw IllegalStateException("Journal not found.")
         }
 
-        return updatedJournal
+        val username = getCurrentUsername(
+            uid = uid,
+            email = currentUser.email.orEmpty(),
+            displayName = currentUser.displayName.orEmpty()
+        )
+
+        val commentRef = journalRef
+            .collection("comments")
+            .document()
+
+        val comment = JournalComment(
+            id = commentRef.id,
+            journalId = journalId,
+            authorUid = uid,
+            authorUsername = username,
+            text = trimmedText,
+            createdAt = System.currentTimeMillis()
+        )
+
+        commentRef.set(comment).await()
+        return comment
     }
 
     suspend fun deleteJournal(journalId: String) {
@@ -231,6 +331,30 @@ class JournalRepository(
             }
         }
 
+        val commentsSnapshot = journalDocRef.collection("comments").get().await()
+        commentsSnapshot.documents.forEach { document ->
+            document.reference.delete().await()
+        }
+
         journalDocRef.delete().await()
+    }
+
+    private suspend fun getCurrentUsername(
+        uid: String,
+        email: String,
+        displayName: String
+    ): String {
+        val profileSnapshot = firestore
+            .collection("users")
+            .document(uid)
+            .get()
+            .await()
+
+        val savedUsername = profileSnapshot.getString("username").orEmpty().trim()
+
+        if (savedUsername.isNotBlank()) return savedUsername
+        if (displayName.isNotBlank()) return displayName.trim()
+
+        return email.substringBefore("@", missingDelimiterValue = "user").ifBlank { "user" }
     }
 }
