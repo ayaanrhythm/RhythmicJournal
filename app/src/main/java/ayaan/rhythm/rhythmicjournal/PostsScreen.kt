@@ -87,31 +87,13 @@ fun PostsScreen(
     val selectedMenuPost = posts.firstOrNull { it.id == selectedMenuPostId }
 
     fun sharePost(post: JournalEntry) {
-        val shareText = buildString {
-            append(post.title.ifBlank { "RhythmicJournal post" })
-
-            if (post.reflection.isNotBlank()) {
-                append("\n\n")
-                append(post.reflection)
-            }
-
-            if (post.tags.isNotEmpty()) {
-                append("\n\n")
-                append(post.tags.joinToString(" ") { "#$it" })
-            }
-
-            if (post.locationName.isNotBlank()) {
-                append("\n")
-                append(post.locationName)
+        scope.launch {
+            try {
+                shareJournalPost(context, post)
+            } catch (e: Exception) {
+                errorMessage = e.localizedMessage ?: "Could not share post."
             }
         }
-
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, shareText)
-        }
-
-        context.startActivity(Intent.createChooser(shareIntent, "Share post"))
     }
 
     fun updatePostInList(updated: JournalEntry) {

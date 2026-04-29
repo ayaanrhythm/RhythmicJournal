@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
@@ -22,9 +24,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Collections
 import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -45,13 +45,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 
+@Suppress("UNUSED_PARAMETER")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EntryDetailScreen(
@@ -62,49 +65,70 @@ fun EntryDetailScreen(
     onDeleted: () -> Unit,
     onOpenAlbum: (String) -> Unit
 ) {
+    val context = LocalContext.current
     val journalRepository = remember { JournalRepository() }
     val profileRepository = remember { ProfileRepository() }
     val scope = rememberCoroutineScope()
 
-    var journal by remember { mutableStateOf<JournalEntry?>(null) }
+    var post by remember { mutableStateOf<JournalEntry?>(null) }
     var username by remember { mutableStateOf("username") }
-    var commentCount by remember { mutableIntStateOf(0) }
+    var profileImageUrl by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isDeleting by remember { mutableStateOf(false) }
     var showMenu by rememberSaveable { mutableStateOf(false) }
     var showComments by rememberSaveable { mutableStateOf(false) }
+    var refreshTick by remember { mutableIntStateOf(0) }
 
-    fun loadEntry() {
+    fun loadPost() {
         scope.launch {
             isLoading = true
             errorMessage = null
+
             try {
-                journal = journalRepository.getJournalById(journalId)
-                commentCount = journalRepository.getComments(journalId).size
-                username = profileRepository.getOrCreateCurrentUserProfile().username.ifBlank { "username" }
-                if (journal == null) errorMessage = "Post not found."
+                val profile = profileRepository.getOrCreateCurrentUserProfile()
+                val loadedPost = journalRepository
+                    .getCurrentUserJournals()
+                    .firstOrNull { it.id == journalId }
+
+                username = profile.username.ifBlank { "username" }
+                profileImageUrl = profile.profileImageUrl
+
+                if (loadedPost == null) {
+                    errorMessage = "Post not found."
+                    post = null
+                } else {
+                    post = loadedPost
+                }
             } catch (e: Exception) {
                 errorMessage = e.localizedMessage ?: "Could not load post."
+                post = null
             } finally {
                 isLoading = false
             }
         }
     }
 
-    LaunchedEffect(journalId) {
-        loadEntry()
+    fun updateLoadedPost(updated: JournalEntry) {
+        post = updated
     }
 
-    if (showComments) {
-        CommentsBottomSheet(
-            journalId = journalId,
-            onDismiss = { showComments = false },
-            onCommentCountChanged = { count -> commentCount = count }
-        )
+    fun shareLoadedPost() {
+        val currentPost = post ?: return
+        scope.launch {
+            try {
+                shareJournalPost(context, currentPost)
+            } catch (e: Exception) {
+                errorMessage = e.localizedMessage ?: "Could not share post."
+            }
+        }
     }
 
-    if (showMenu) {
+    LaunchedEffect(journalId, refreshTick) {
+        loadPost()
+    }
+
+    if (showMenu && post != null) {
+        val currentPost = post!!
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
         ModalBottomSheet(
@@ -119,48 +143,57 @@ fun EntryDetailScreen(
                     .navigationBarsPadding()
                     .padding(horizontal = 24.dp, vertical = 8.dp)
             ) {
-                DetailMenuItem("Share") {
-                    showMenu = false
-                    onShare()
-                }
-
-                DetailMenuItem("Edit Post") {
-                    journal?.let {
+                EntryDetailMenuItem(
+                    text = "Share",
+                    onClick = {
+                        shareLoadedPost()
                         showMenu = false
-                        onEdit(it.id)
                     }
-                }
+                )
 
-                DetailMenuItem(
+                EntryDetailMenuItem(
+                    text = "Edit Post",
+                    onClick = {
+                        onEdit(currentPost.id)
+                        showMenu = false
+                    }
+                )
+
+                EntryDetailMenuItem(
                     text = "Delete Post",
-                    isDestructive = true
-                ) {
-                    val entry = journal
-                    if (entry != null && !isDeleting) {
+                    isDestructive = true,
+                    onClick = {
                         scope.launch {
-                            isDeleting = true
                             try {
-                                journalRepository.deleteJournal(entry.id)
+                                journalRepository.deleteJournal(currentPost.id)
                                 showMenu = false
                                 onDeleted()
                             } catch (e: Exception) {
                                 errorMessage = e.localizedMessage ?: "Could not delete post."
-                            } finally {
-                                isDeleting = false
                             }
                         }
                     }
-                }
+                )
 
-                DetailMenuItem("Cancel") {
-                    showMenu = false
-                }
+                EntryDetailMenuItem(
+                    text = "Cancel",
+                    onClick = { showMenu = false }
+                )
             }
         }
     }
 
+    if (showComments && post != null) {
+        CommentsBottomSheet(
+            journalId = post!!.id,
+            onDismiss = { showComments = false },
+            onCommentCountChanged = { refreshTick += 1 }
+        )
+    }
+
     Column(
         modifier = Modifier
+            .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
@@ -174,7 +207,7 @@ fun EntryDetailScreen(
                     contentDescription = "More",
                     tint = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier
-                        .size(30.dp)
+                        .size(28.dp)
                         .clickable { showMenu = true }
                 )
             }
@@ -182,7 +215,12 @@ fun EntryDetailScreen(
 
         when {
             isLoading -> {
-                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 80.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
                         text = "Loading post...",
                         style = MaterialTheme.typography.bodyLarge,
@@ -191,8 +229,13 @@ fun EntryDetailScreen(
                 }
             }
 
-            errorMessage != null -> {
-                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+            errorMessage != null && post == null -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 80.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
                         text = errorMessage ?: "Could not load post.",
                         style = MaterialTheme.typography.bodyLarge,
@@ -201,13 +244,88 @@ fun EntryDetailScreen(
                 }
             }
 
-            journal != null -> {
-                val entry = journal!!
-                val tagsLine = entry.tags.joinToString(" ") { "#$it" }
+            post == null -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 80.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Post not found.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
-                if (entry.photoUrl.isNotBlank()) {
+            else -> {
+                val currentPost = post!!
+
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (profileImageUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = profileImageUrl,
+                                contentDescription = "Profile",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            )
+                        } else {
+                            Surface(
+                                modifier = Modifier.size(42.dp),
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = username.take(1).uppercase(),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column {
+                            Text(
+                                text = username,
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+
+                            Text(
+                                text = currentPost.locationName.ifBlank { "No location" },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (currentPost.photoUrl.isNotBlank()) {
                     AsyncImage(
-                        model = entry.photoUrl,
+                        model = currentPost.photoUrl,
                         contentDescription = "Post photo",
                         contentScale = ContentScale.FillWidth,
                         modifier = Modifier
@@ -215,229 +333,163 @@ fun EntryDetailScreen(
                             .wrapContentHeight()
                     )
                 } else {
-                    PostPhotoPlaceholder()
-                }
-
-                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp),
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceVariant
                     ) {
-                        Text(
-                            text = username,
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.fillMaxWidth(0.45f)
-                        )
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(20.dp)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 80.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            EntryIconAction(
-                                icon = if (entry.isLoved) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                                contentDescription = "Love",
-                                tint = if (entry.isLoved) Color.Red else MaterialTheme.colorScheme.onBackground,
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            val newValue = !entry.isLoved
-                                            journalRepository.setLoved(entry.id, newValue)
-                                            journal = entry.copy(isLoved = newValue)
-                                        } catch (e: Exception) {
-                                            errorMessage = e.localizedMessage ?: "Could not update liked state."
-                                        }
-                                    }
-                                }
-                            )
-
-                            EntryIconAction(
-                                icon = Icons.Outlined.ChatBubbleOutline,
-                                contentDescription = "Comments",
-                                onClick = { showComments = true }
-                            )
-
-                            EntryIconAction(
-                                icon = Icons.AutoMirrored.Outlined.Send,
-                                contentDescription = "Share",
-                                onClick = onShare
-                            )
-
-                            EntryIconAction(
-                                icon = if (entry.isFavorite) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                                contentDescription = "Save",
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            val newValue = !entry.isFavorite
-                                            journalRepository.setFavorite(entry.id, newValue)
-                                            journal = entry.copy(isFavorite = newValue)
-                                        } catch (e: Exception) {
-                                            errorMessage = e.localizedMessage ?: "Could not update saved state."
-                                        }
-                                    }
-                                }
+                            Text(
+                                text = "No photo",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
+                }
 
-                    Text(
-                        text = entry.title.ifBlank { "Untitled post" },
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.padding(top = 18.dp)
-                    )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(18.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (currentPost.isLoved) {
+                                Icons.Filled.Favorite
+                            } else {
+                                Icons.Outlined.FavoriteBorder
+                            },
+                            contentDescription = "Love",
+                            tint = if (currentPost.isLoved) Color.Red else MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clickable {
+                                    scope.launch {
+                                        try {
+                                            val newValue = !currentPost.isLoved
+                                            journalRepository.setLoved(currentPost.id, newValue)
+                                            updateLoadedPost(currentPost.copy(isLoved = newValue))
+                                        } catch (e: Exception) {
+                                            errorMessage = e.localizedMessage ?: "Could not update post."
+                                        }
+                                    }
+                                }
+                        )
 
-                    if (entry.reflection.isNotBlank()) {
-                        Text(
-                            text = entry.reflection,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp)
+                        Icon(
+                            imageVector = Icons.Outlined.ChatBubbleOutline,
+                            contentDescription = "Comments",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clickable { showComments = true }
+                        )
+
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = "Share",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clickable { shareLoadedPost() }
                         )
                     }
 
-                    if (tagsLine.isNotBlank()) {
-                        Text(
-                            text = tagsLine,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color(0xFF6F9BFF),
-                            modifier = Modifier.padding(top = 12.dp)
-                        )
-                    }
-
-                    DetailMetaRow(
-                        leadingText = entry.entryDateText.ifBlank { "No date" },
-                        trailingText = entry.locationName.ifBlank { "No location" }
-                    )
-
-                    if (entry.album.isNotBlank()) {
-                        DetailSingleMetaRow(
-                            icon = Icons.Outlined.Collections,
-                            text = entry.album,
-                            onClick = {
-                                if (entry.albumId.isNotBlank()) {
-                                    onOpenAlbum(entry.albumId)
+                    Icon(
+                        imageVector = if (currentPost.isFavorite) {
+                            Icons.Filled.Bookmark
+                        } else {
+                            Icons.Outlined.BookmarkBorder
+                        },
+                        contentDescription = "Save",
+                        tint = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clickable {
+                                scope.launch {
+                                    try {
+                                        val newValue = !currentPost.isFavorite
+                                        journalRepository.setFavorite(currentPost.id, newValue)
+                                        updateLoadedPost(currentPost.copy(isFavorite = newValue))
+                                    } catch (e: Exception) {
+                                        errorMessage = e.localizedMessage ?: "Could not update saved post."
+                                    }
                                 }
                             }
-                        )
-                    }
+                    )
+                }
 
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(top = 18.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = currentPost.title.ifBlank { "Untitled post" },
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onBackground
                     )
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showComments = true }
-                            .padding(top = 16.dp, bottom = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    if (currentPost.reflection.isNotBlank()) {
                         Text(
-                            text = "Comments ($commentCount)",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-
-                        Text(
-                            text = "View all",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = currentPost.reflection,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
+
+                    if (currentPost.tags.isNotEmpty()) {
+                        Text(
+                            text = currentPost.tags.joinToString(" ") { "#$it" },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color(0xFF6F9BFF),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+
+                    if (currentPost.album.isNotBlank()) {
+                        Text(
+                            text = currentPost.album,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .clickable {
+                                    if (currentPost.albumId.isNotBlank()) {
+                                        onOpenAlbum(currentPost.albumId)
+                                    }
+                                }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(1.dp))
                 }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 12.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f)
+                )
             }
         }
     }
 }
 
 @Composable
-private fun EntryIconAction(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    contentDescription: String,
-    tint: Color = MaterialTheme.colorScheme.onBackground,
-    onClick: () -> Unit
-) {
-    Icon(
-        imageVector = icon,
-        contentDescription = contentDescription,
-        tint = tint,
-        modifier = Modifier
-            .size(30.dp)
-            .clickable(onClick = onClick)
-    )
-}
-
-@Composable
-private fun DetailMetaRow(
-    leadingText: String,
-    trailingText: String
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(top = 18.dp)
-    ) {
-        Text(
-            text = leadingText,
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.width(16.dp))
-
-        Icon(
-            imageVector = Icons.Outlined.LocationOn,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.size(24.dp)
-        )
-
-        Spacer(modifier = Modifier.width(6.dp))
-
-        Text(
-            text = trailingText,
-            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Medium),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-    }
-}
-
-@Composable
-private fun DetailSingleMetaRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String,
-    onClick: (() -> Unit)? = null
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .padding(top = 12.dp)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.size(22.dp)
-        )
-
-        Spacer(modifier = Modifier.width(8.dp))
-
-        Text(
-            text = text,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-    }
-}
-
-@Composable
-private fun DetailMenuItem(
+private fun EntryDetailMenuItem(
     text: String,
     isDestructive: Boolean = false,
     onClick: () -> Unit
@@ -445,27 +497,14 @@ private fun DetailMenuItem(
     Text(
         text = text,
         style = MaterialTheme.typography.titleLarge,
-        color = if (isDestructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
+        color = if (isDestructive) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onBackground
+        },
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(vertical = 16.dp)
     )
-}
-
-@Composable
-private fun PostPhotoPlaceholder() {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .wrapContentHeight(),
-        color = MaterialTheme.colorScheme.surfaceVariant
-    ) {
-        Text(
-            text = "NO PHOTO",
-            modifier = Modifier.padding(vertical = 80.dp, horizontal = 20.dp),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
 }
